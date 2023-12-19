@@ -1,0 +1,19 @@
+{
+  "name": "tribotmon",
+  "version": "1.0.0",
+  "description": "",
+  "main": "OsVerifyBot.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "csvtojson": "^2.0.10",
+    "moment": "^2.29.4",
+    "process-list": "^2.0.0",
+    "ps-list": "^8.1.1",
+    "win-ps": "^0.0.1",
+    "winston": "^3.11.0"
+  }
+}
