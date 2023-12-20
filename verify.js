@@ -42,8 +42,10 @@ const loadAccounts = async (filename, accounts, oldAccounts) => {
         noheader: true,
         headers: ["account", "password"],
     }).fromFile(filename);
-    rows.forEach(({ account, password }) => {
-        accounts[account] = password;
+    rows.forEach(({ account, password, trainedAt }) => {
+        if (!oldAccounts && moment(trainedAt, 'YYYY-MM-DD hh:mm').diff(moment(), 'day', true) > 6) {
+            accounts[account] = password;
+        }
         if (oldAccounts && account in oldAccounts) delete oldAccounts[account];
     });
 };
@@ -99,39 +101,26 @@ const startVerify = async () => {
     logger.info("verify process is finished.");
 };
 
-const findProcess = async (account) => {
-    const pslist = require("process-list");
-    const tasks = await pslist.snapshot("pid", "name", "starttime");
-    let ptask;
-    let diffSecs = 6000;
-    tasks
-        .filter((task) => task.name.indexOf("java") !== -1)
-        .forEach((task) => {
-            if (moment(task.starttime).isAfter(moment(processes[account]))) {
-                if (
-                    diffSecs >
-                    moment(task.starttime).diff(
-                        moment(processes[account]),
-                        "second",
-                        false
-                    )
-                ) {
-                    ptask = task;
-                    diffSecs = moment(task.starttime).diff(
-                        moment(processes[account]),
-                        "second",
-                        false
-                    );
-                }
+const findProcess =  (account) => {
+    return new Promise((resolve, reject) => {
+        cp.exec(`ps -ef | grep ${account}`, (err, stdout) => {
+            if (err) {
+                reject(err);
+            } else {
+                if (stdout.indexOf('java') === -1)
+                    resolve();
+                else
+                    resolve(stdout.split(/\s+/)[1]);
             }
-        });
-    return ptask ? ptask.pid : -1;
+        })
+    })
 };
 
 const closeProcess = async (account) => {
     const pid = await findProcess(account);
     try {
-        process.kill(pid, "SIGKILL");
+        if (pid)
+            process.kill(pid, "SIGKILL");
         delete processes[account];
         return true;
     } catch (e) {

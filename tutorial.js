@@ -43,13 +43,16 @@ const loadAccounts = async (filename, accounts, oldAccounts) => {
         noheader: true,
         headers: ["account", "password"],
     }).fromFile(filename);
-    logger.info(`load accounts from ${filename}.`);
+    // logger.info(`load accounts from ${filename}.`);
     rows.forEach(({ account, password }) => {
-        accounts[account.trim()] = password.trim();
-        logger.info(`read account ${account}.`);
-        if (oldAccounts && account.trim() in oldAccounts) {
-            logger.info(`${account} is already trained.`)
-            delete oldAccounts[account.trim()];
+        if (account.trim() in accounts) {
+
+        } else {
+            
+            accounts[account.trim()] = password.trim();
+            if (oldAccounts && account.trim() in oldAccounts) {
+                delete oldAccounts[account.trim()];
+            }                
         }
     });
 };
@@ -62,35 +65,45 @@ const loadProxies = async () => {
         headers: ["username", "password", "address", "port"],
     }).fromFile(config.PROXY_ACCOUNT);
     rows.forEach(({ username, password, address, port }) => {
-        console.log(username, password, address, port);
         proxies.push({username, password, address, port});
     });
 };
 
 // run tribot verify process
 const runTribot = (account, proxy) => {
-    logger.info(`run process ${account} with ${JSON.stringify(proxy)}, ${proxy.address}`);
-    processes[account] = { starttime: new Date(), proxy: proxy};
-    cp.spawn("java", 
-    [
-        "-jar",
-        // "c:/Users/Administator/AppData/Roaming/.tribot/install/Splash/tribot-splash.jar",
-        "tribot-splash.jar",
-        "--username",
-        config.TRIBOT_USERNAME,
-        "--password",
-        config.TRIBOT_PASSWORD,
-        "--charusername",
-        account,
-        "--charpassword",
-        rawAccounts[account],
-        "--charworld",
-        config.TRIBOT_WORLD,
-        "--script",
-        config.TUTORIAL_SCRIPT,
-        "--scriptargs",
-        account
-    ]);
+    try {
+        processes[account] = { starttime: new Date(), proxy: proxy};
+        const params = [
+            "-jar",
+            "/root/.tribot/install/Splash/tribot-splash.jar",
+            "--username",
+            config.TRIBOT_USERNAME,
+            "--password",
+            config.TRIBOT_PASSWORD,
+            "--charusername",
+            account,
+            "--charpassword",
+            rawAccounts[account],
+            "--charworld",
+            config.TRIBOT_WORLD,
+            "--script",
+            config.TUTORIAL_SCRIPT,
+            "--scriptargs",
+            account,
+            "--proxyhost",
+            proxy.address,
+            "--proxyport",
+            proxy.port,
+            "--proxyusername",
+            proxy.username,
+            "--proxypassword",
+            proxy.password,
+        ];
+        // logger.info(`run process ${account} with ${params}`);    
+        cp.spawn("java", params);    
+    } catch(e) {
+        console.error(e);
+    }
 };
 
 // select next account from trained accounts
@@ -112,59 +125,92 @@ const startTutorial = async () => {
         );
         if (Object.keys(processes).length < config.TUTORIAL_MAXCOUNT) {
             const account = selectNextAccount();
-            const proxy = proxies.shift();
-            logger.info(`select ${account} and ${proxy}.`);
-            if (account && proxy) runTribot(account, proxy);
+            if (account) {
+                const proxy = proxies.shift();
+                logger.info(`train ${account} with ${proxy.address}.`);
+                runTribot(account, proxy);
+            }
         }
         await waitTime(config.TUTORIAL_INTERVAL * 1000);
     }
     logger.info("tutorial bot is finished.");
 };
 
-const findProcess = async (account) => {
-    const pslist = require("process-list");
-    const tasks = await pslist.snapshot("pid", "name", "starttime");
-    let ptask;
-    let diffSecs = 6000;
-    console.log(JSON.stringify(processes[account]));
-    const tasktime = processes[account].starttime;
-    tasks
-        .filter((task) => task.name.indexOf("java") !== -1)
-        .forEach((task) => {
-            if (moment(task.starttime).isAfter(moment(tasktime))) {
-                if (
-                    diffSecs >
-                    moment(task.starttime).diff(
-                        moment(tasktime),
-                        "second",
-                        false
-                    )
-                ) {
-                    ptask = task;
-                    diffSecs = moment(task.starttime).diff(
-                        moment(tasktime),
-                        "second",
-                        false
-                    );
-                }
+// const findProcessInWindows = async (account) => {
+//     const pslist = require("process-list");
+//     const tasks = await pslist.snapshot("pid", "name", "starttime");
+//     let ptask;
+//     let diffSecs = 6000;
+//     console.log(JSON.stringify(processes[account]));
+//     const tasktime = processes[account].starttime;
+//     tasks
+//         .filter((task) => task.name.indexOf("java") !== -1)
+//         .forEach((task) => {
+//             if (moment(task.starttime).isAfter(moment(tasktime))) {
+//                 if (
+//                     diffSecs >
+//                     moment(task.starttime).diff(
+//                         moment(tasktime),
+//                         "second",
+//                         false
+//                     )
+//                 ) {
+//                     ptask = task;
+//                     diffSecs = moment(task.starttime).diff(
+//                         moment(tasktime),
+//                         "second",
+//                         false
+//                     );
+//                 }
+//             }
+//         });
+//     return ptask ? ptask.pid : -1;
+// };
+
+const findProcessInLinux =  (account) => {
+    return new Promise((resolve, reject) => {
+        cp.exec(`ps -ef | grep ${account}`, (err, stdout) => {
+            if (err) {
+                reject(err);
+            } else {
+                if (stdout.indexOf('java') === -1)
+                    resolve();
+                else
+                    resolve(stdout.split(/\s+/)[1]);
             }
-        });
-    return ptask ? ptask.pid : -1;
+        })
+    })
 };
 
 const closeProcess = async (account) => {
-    const pid = await findProcess(account);
+    // const pid = config.OS_LINUX ? await findProcessInLinux(account) : await findProcessInWindows(account);
+    const pid = await findProcessInLinux(account);
     try {
-        process.kill(pid, "SIGKILL");
         proxies.push(processes[account].proxy);
         delete processes[account];
-        return true;
+        if (pid) {
+            process.kill(pid, "SIGKILL");
+            return true;
+        }
+        return false;
     } catch (e) {
         logger.info(`close process ${account}, ${pid} failed with ${e}`);
         return false;
     }
 };
 
+const restartProcess = async (account) => {
+    // const pid = config.OS_LINUX ? await findProcessInLinux(account) : await findProcessInWindows(account);
+    const pid = await findProcessInLinux(account);
+    try {
+        process.kill(pid, "SIGKILL");
+        runTribot(account, processes[account].proxy);
+        return true;
+    } catch (e) {
+        logger.info(`restart process ${account}, ${pid} failed with ${e}`);
+        return false;
+    }
+};
 const processAccount = (account) => {
         trainedAccounts[account] = rawAccounts[account];
         fs.appendFileSync(
@@ -185,10 +231,14 @@ const wrongAccount = (account) => {
 };
 
 const processClient = async (account, action) => {
-    logger.info(`accept action ${action} from ${account}`);
-    if (action === 'SUCCESS')
+    if (action === 'SUCCESS') {
+        logger.info(`success ${account}`);
         processAccount(account, action);
-    await closeProcess(account);
+        await closeProcess(account);
+    } else {
+    	logger.info(`restart ${account}, ${action}`);
+        await restartProcess(account);
+    }
 };
 
 const startServer = () => {
@@ -205,22 +255,14 @@ const startServer = () => {
 };
 
 const cleanTimer = async () => {
-    logger.info("starting cleaning....");
     for (const account in processes) {
-        logger.info(
-            `check process for ${account}, ${moment().diff(
-                moment(processes[account].starttime),
-                "minute",
-                false
-            )}`
-        );
         if (moment().diff(moment(processes[account].starttime), "second", false) >= config.TUTORIAL_TIMEOUT) {
-            logger.info(`timeout process from ${account}`);
-            wrongAccount(account);
-            await closeProcess(account);
+	    logger.info(`timeout ${account}`);
+            const closed = await closeProcess(account);
+            if (closed)
+                wrongAccount(account);
         }
     }
-    logger.info("end cleaning....");
 };
 
 const main = async () => {
